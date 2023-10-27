@@ -1,7 +1,8 @@
 import datetime
 import os
+import random
 from functools import partial
-
+import argparse
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -37,7 +38,43 @@ from utils.utils_fit import fit_one_epoch
 3、训练好的权值文件保存在logs文件夹中，每个训练世代（Epoch）包含若干训练步长（Step），每个训练步长（Step）进行一次梯度下降。
    如果只是训练了几个Step是不会保存的，Epoch和Step的概念要捋清楚一下。
 '''
+
+def args_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--backbone', type=str, default='vgg', help='backbone')
+    parser.add_argument('--classes_num', type=int, default=21, help='识别的类别数')
+    parser.add_argument('--pretrained', type=bool, default=True, help='是否使用预训练backbone权重')
+    parser.add_argument('--transfer_path', type=str, default='', help='基于已有权重进行迁移学习的权重路径')
+
+    parser.add_argument('--dataset', type=str, default='VOC2012', help='选择的数据集')
+    parser.add_argument('--image_size', type=list, default=[512, 512], help='训练过程中的图像大小')
+    parser.add_argument('--data_split_rate', type=float, default=0.8, help='训练验证集分割比例')
+    parser.add_argument('--random_flip_h', type=float, default=0.5, help='数据增强，随机水平翻转概率，0为不进行水平翻转')
+    parser.add_argument('--random_flip_v', type=float, default=0.5, help='随机垂直翻转概率，0为不翻转')
+
+    parser.add_argument('--init_epoch', type=int, default=0, help='开始训练的epoch')
+    parser.add_argument('--freeze_epoch', type=int, default=10, help='冻结骨干网络训练epoch数量')
+    parser.add_argument('--training_epoch', type=int, default=20, help='整个网络训练的epoch')
+    parser.add_argument('--freeze_batch_size', type=int, default=4, help='冻结骨干网络训练的bz')
+    parser.add_argument('--unfreeze_batch_size', type=int, default=2, help='整个网络全都更新的bz')
+
+    parser.add_argument('--init_lr', type=float, default=1e-4, help='初始学习率')
+    parser.add_argument('--dice_loss', type=bool, default=True, help='是否使用dice loss')
+    parser.add_argument('--focal_loss', type=bool, default=True, help='是否使用focal loss,不使用则使用默认的CEloss')
+    parser.add_argument('--eval_epoch', type=int, default=1, help='验证频率，计算在验证集上的评价指标，会影响训练速度')
+    parser.add_argument('--save_dir', type=str, default='logss', help='权重及训练日志保存路径')
+
+    args = parser.parse_args()
+    return args
+
+def write_filenames_to_file(file_names, file_path):
+    with open(file_path, 'w') as file:
+        for name in file_names:
+            file.write(name + '\n')
+
 if __name__ == "__main__":
+    args = args_parser()
+
     #---------------------------------#
     #   Cuda    是否使用Cuda
     #           没有GPU可以设置成False
@@ -73,13 +110,13 @@ if __name__ == "__main__":
     #   num_classes     训练自己的数据集必须要修改的
     #                   自己需要的分类个数+1，如2+1
     #-----------------------------------------------------#
-    num_classes = 21
+    num_classes = args.classes_num
     #-----------------------------------------------------#
     #   主干网络选择
     #   vgg
     #   resnet50
     #-----------------------------------------------------#
-    backbone    = "vgg"
+    backbone    = args.backbone
     #----------------------------------------------------------------------------------------------------------------------------#
     #   pretrained      是否使用主干网络的预训练权重，此处使用的是主干的权重，因此是在模型构建的时候进行加载的。
     #                   如果设置了model_path，则主干的权值无需加载，pretrained的值无意义。
@@ -105,11 +142,22 @@ if __name__ == "__main__":
     #   一般来讲，网络从0开始的训练效果会很差，因为权值太过随机，特征提取效果不明显，因此非常、非常、非常不建议大家从0开始训练！
     #   如果一定要从0开始，可以了解imagenet数据集，首先训练分类模型，获得网络的主干部分权值，分类模型的 主干部分 和该模型通用，基于此进行训练。
     #----------------------------------------------------------------------------------------------------------------------------#
-    model_path  = "logs/best_epoch_weights.pth"
+    # 先判断是否进行迁移学习，如果进行，则从迁移学习的路径读取
+    # 否，则判断是否使用预训练的backbone，如果使用，则读取backbone存储路径
+    # 最后加载权重文件
+
+    model_path =''
+    if args.transfer_path !='':
+        model_path  = args.transfer_path  # 需要修改一下，兼容backbone的
+    elif args.pretrained:
+        if args.backbone == 'vgg':
+            model_path = 'model_data/unet_vgg_voc.pth'
+        elif args.backbone == 'resnet50':
+            model_path = 'model_data/unet_resnet50_voc.pth'
     #-----------------------------------------------------#
     #   input_shape     输入图片的大小，32的倍数
     #-----------------------------------------------------#
-    input_shape = [512, 512]
+    input_shape = args.image_size
     
     #----------------------------------------------------------------------------------------------------------------------------#
     #   训练分为两个阶段，分别是冻结阶段和解冻阶段。设置冻结阶段是为了满足机器性能不足的同学的训练需求。
@@ -153,9 +201,9 @@ if __name__ == "__main__":
     #   Freeze_batch_size   模型冻结训练的batch_size
     #                       (当Freeze_Train=False时失效)
     #------------------------------------------------------------------#
-    Init_Epoch          = 4
-    Freeze_Epoch        = 50
-    Freeze_batch_size   = 2
+    Init_Epoch          = args.init_epoch
+    Freeze_Epoch        = args.freeze_epoch
+    Freeze_batch_size   = args.freeze_batch_size
     #------------------------------------------------------------------#
     #   解冻阶段训练参数
     #   此时模型的主干不被冻结了，特征提取网络会发生改变
@@ -163,13 +211,16 @@ if __name__ == "__main__":
     #   UnFreeze_Epoch          模型总共训练的epoch
     #   Unfreeze_batch_size     模型在解冻后的batch_size
     #------------------------------------------------------------------#
-    UnFreeze_Epoch      = 100
-    Unfreeze_batch_size = 2
+    UnFreeze_Epoch      = args.training_epoch
+    Unfreeze_batch_size = args.unfreeze_batch_size
     #------------------------------------------------------------------#
     #   Freeze_Train    是否进行冻结训练
     #                   默认先冻结主干训练后解冻训练。
     #------------------------------------------------------------------#
-    Freeze_Train        = True
+    if Freeze_Epoch > 0:
+        Freeze_Train = True
+    else:
+        Freeze_Train = False
 
     #------------------------------------------------------------------#
     #   其它训练参数：学习率、优化器、学习率下降有关
@@ -180,7 +231,7 @@ if __name__ == "__main__":
     #                   当使用SGD优化器时建议设置   Init_lr=1e-2
     #   Min_lr          模型的最小学习率，默认为最大学习率的0.01
     #------------------------------------------------------------------#
-    Init_lr             = 1e-4
+    Init_lr             = args.init_lr
     Min_lr              = Init_lr * 0.01
     #------------------------------------------------------------------#
     #   optimizer_type  使用到的优化器种类，可选的有adam、sgd
@@ -200,11 +251,11 @@ if __name__ == "__main__":
     #------------------------------------------------------------------#
     #   save_period     多少个epoch保存一次权值
     #------------------------------------------------------------------#
-    save_period         = 5
+    save_period         = args.training_epoch
     #------------------------------------------------------------------#
     #   save_dir        权值与日志文件保存的文件夹
     #------------------------------------------------------------------#
-    save_dir            = 'logs'
+    save_dir            = args.save_dir
     #------------------------------------------------------------------#
     #   eval_flag       是否在训练时进行评估，评估对象为验证集
     #   eval_period     代表多少个epoch评估一次，不建议频繁的评估
@@ -214,23 +265,30 @@ if __name__ == "__main__":
     #   （二）此处设置评估参数较为保守，目的是加快评估速度。
     #------------------------------------------------------------------#
     eval_flag           = True
-    eval_period         = 5
+    eval_period         = args.eval_epoch
     
     #------------------------------#
     #   数据集路径
     #------------------------------#
-    VOCdevkit_path  = 'VOCdevkit'
+    # 获取数据集的名称，从而获得对应的数据集路径等元信息
+    dataset_name = args.dataset
+    VOCdevkit_path = 'VOCdevkit/VOC2012'  #
+    if dataset_name == 'VOC2012':
+        VOCdevkit_path = 'VOCdevkit/VOC2012'  # 需要根据实际情况确认，或通过args传入
+    elif dataset_name == 'VOC2007':
+        VOCdevkit_path = 'VOCdevkit/VOC2007'
+
     #------------------------------------------------------------------#
     #   建议选项：
     #   种类少（几类）时，设置为True
     #   种类多（十几类）时，如果batch_size比较大（10以上），那么设置为True
     #   种类多（十几类）时，如果batch_size比较小（10以下），那么设置为False
     #------------------------------------------------------------------#
-    dice_loss       = False
+    dice_loss       = args.dice_loss
     #------------------------------------------------------------------#
-    #   是否使用focal loss来防止正负样本不平衡
+    #   是否使用focal loss来防止正负样本不平衡, 默认为CEloss
     #------------------------------------------------------------------#
-    focal_loss      = False
+    focal_loss      = args.focal_loss
     #------------------------------------------------------------------#
     #   是否给不同种类赋予不同的损失权值，默认是平衡的。
     #   设置的话，注意设置成numpy形式的，长度和num_classes一样。
@@ -279,6 +337,7 @@ if __name__ == "__main__":
     model = Unet(num_classes=num_classes, pretrained=pretrained, backbone=backbone).train()
     if not pretrained:
         weights_init(model)
+
     if model_path != '':
         #------------------------------------------------------#
         #   权值文件请看README，百度网盘下载
@@ -313,7 +372,7 @@ if __name__ == "__main__":
     #----------------------#
     if local_rank == 0:
         time_str        = datetime.datetime.strftime(datetime.datetime.now(),'%Y_%m_%d_%H_%M_%S')
-        log_dir         = os.path.join(save_dir, "loss_" + str(time_str))
+        log_dir         = os.path.join(save_dir, "loss_" + str(time_str))  # 是否需要修改，日志存放路径
         loss_history    = LossHistory(log_dir, model, input_shape=input_shape)
     else:
         loss_history    = None
@@ -348,13 +407,23 @@ if __name__ == "__main__":
             model_train = torch.nn.DataParallel(model)
             cudnn.benchmark = True
             model_train = model_train.cuda()
-    
-    #   读取数据集对应的txt
-    #---------------------------#
-    with open(os.path.join(VOCdevkit_path, "VOC2012/ImageSets/Segmentation/train.txt"),"r") as f:
-        train_lines = f.readlines()
-    with open(os.path.join(VOCdevkit_path, "VOC2012/ImageSets/Segmentation/val.txt"),"r") as f:
-        val_lines = f.readlines()
+
+    # 如果要实现根据输入比例来划分训练验证集，需要对此进行处理，同时还需处理，让他兼容其他类型的数据集？
+    # 根据比例划分训练验证数据：
+    data_names = os.listdir(os.path.join(VOCdevkit_path, "SegmentationClass"))
+    data_names = [i[:-4] for i in data_names]
+    random.shuffle(data_names)
+    split_rate = args.data_split_rate
+    split_index = int(len(data_names) * split_rate)
+    train_lines = data_names[:split_index]
+    val_lines = data_names[split_index:]
+
+    # #   读取数据集对应的txt
+    # #---------------------------#
+    # with open(os.path.join(VOCdevkit_path, "ImageSets/Segmentation/train.txt"),"r") as f:
+    #     train_lines = f.readlines()
+    # with open(os.path.join(VOCdevkit_path, "ImageSets/Segmentation/val.txt"),"r") as f:
+    #     val_lines = f.readlines()
     num_train   = len(train_lines)
     num_val     = len(val_lines)
         
@@ -417,7 +486,7 @@ if __name__ == "__main__":
         if epoch_step == 0 or epoch_step_val == 0:
             raise ValueError("数据集过小，无法继续进行训练，请扩充数据集。")
 
-        train_dataset   = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path)
+        train_dataset   = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path)  # 传入数据增强的参数
         val_dataset     = UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path)
         
         if distributed:
