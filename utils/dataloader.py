@@ -10,7 +10,7 @@ from utils.utils import cvtColor, preprocess_input
 
 
 class UnetDataset(Dataset):
-    def __init__(self, annotation_lines, input_shape, num_classes, train, dataset_path):
+    def __init__(self, annotation_lines, input_shape, num_classes, train, dataset_path, convert_map = None):
         super(UnetDataset, self).__init__()
         self.annotation_lines   = annotation_lines
         self.length             = len(annotation_lines)
@@ -18,6 +18,7 @@ class UnetDataset(Dataset):
         self.num_classes        = num_classes
         self.train              = train
         self.dataset_path       = dataset_path
+        self.conversion_dict = convert_map
 
     def __len__(self):
         return self.length
@@ -29,8 +30,8 @@ class UnetDataset(Dataset):
         #-------------------------------#
         #   从文件中读取图像
         #-------------------------------#
-        jpg         = Image.open(os.path.join(os.path.join(self.dataset_path, "VOC2007/JPEGImages"), name + ".jpg"))
-        png         = Image.open(os.path.join(os.path.join(self.dataset_path, "VOC2007/SegmentationClass"), name + ".png"))
+        jpg         = Image.open(os.path.join(os.path.join(self.dataset_path, "jpg"), name + ".jpg"))
+        png         = Image.open(os.path.join(os.path.join(self.dataset_path, "anno"), name + ".png"))
         #-------------------------------#
         #   数据增强
         #-------------------------------#
@@ -38,7 +39,7 @@ class UnetDataset(Dataset):
 
         jpg         = np.transpose(preprocess_input(np.array(jpg, np.float64)), [2,0,1])
         png         = np.array(png)
-        png[png >= self.num_classes] = self.num_classes
+        png[png >= self.num_classes] = self.num_classes  # ？？
         #-------------------------------------------------------#
         #   转化成one_hot的形式
         #   在这里需要+1是因为voc数据集有些标签具有白边部分
@@ -54,7 +55,20 @@ class UnetDataset(Dataset):
 
     def get_random_data(self, image, label, input_shape, jitter=.3, hue=.1, sat=0.7, val=0.3, random=True):
         image   = cvtColor(image)
-        label   = Image.fromarray(np.array(label))
+        if self.conversion_dict is None:
+            label = Image.fromarray(np.array(label))
+        else:
+            # 复制、值转化
+            ori_label = np.array(label)
+            convert_label = np.zeros_like(ori_label)
+            # 定义转换规则，将像素值为 2 的类别转换为 1，像素值为 5 的类别转换为 2
+
+            # 根据转换规则进行转换
+            for original_val, new_val in self.conversion_dict.items():
+                convert_label[ori_label == original_val] = new_val
+
+            label   = Image.fromarray(convert_label)  # 检查对色彩的对应， 修改value为0到num_classes
+
         #------------------------------#
         #   获得图像的高宽与目标高宽
         #------------------------------#
@@ -93,7 +107,7 @@ class UnetDataset(Dataset):
         #------------------------------------------#
         #   翻转图像
         #------------------------------------------#
-        flip = self.rand()<.5
+        flip = self.rand()<.5  # flip的参数
         if flip: 
             image = image.transpose(Image.FLIP_LEFT_RIGHT)
             label = label.transpose(Image.FLIP_LEFT_RIGHT)
