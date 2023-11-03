@@ -1,9 +1,10 @@
+import argparse
 import ast
 import datetime
 import os
 import random
 from functools import partial
-import argparse
+import json
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -13,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from nets.unet import Unet
 from nets.unet_training import get_lr_scheduler, set_optimizer_lr, weights_init
-from utils.callbacks import EvalCallback, LossHistory
+# from utils.callbacks import EvalCallback, LossHistory
 from utils.dataloader import UnetDataset, unet_dataset_collate
 from utils.utils import (download_weights, seed_everything, show_config,
                          worker_init_fn)
@@ -49,23 +50,24 @@ def args_parser():
                         help='所有类别')
     parser.add_argument('--categorys', type=int, nargs='+', help='需要预测的类别')
     parser.add_argument('--pretrained', type=bool, default=True, help='是否使用预训练backbone权重')
-    parser.add_argument('--transfer_path', type=str, default='', help='基于已有权重进行迁移学习的权重路径')
+    parser.add_argument('--transfer_path', type=str, default=r'E:\python\ZEV\unet-pytorch\logs\last_epoch_weights.pth', help='基于已有权重进行迁移学习的权重路径')
     parser.add_argument('--dataset_path', type=str, nargs='+', help='数据集路径')
 
-    parser.add_argument('--training_epoch', type=int, default=50, help='整个网络训练的epoch')
+    parser.add_argument('--training_epoch', type=int, default=10, help='整个网络训练的epoch')
     parser.add_argument('--batch_size', type=int, default=2, help='整个网络全都更新的bz')
 
     parser.add_argument('--init_lr', type=float, default=1e-4, help='初始学习率')
-    parser.add_argument('--dice_loss', type=bool, default=True, help='是否使用dice loss')
+    parser.add_argument('--dice_loss', type=bool, default=False, help='是否使用dice loss')
     parser.add_argument('--focal_loss', type=bool, default=True, help='是否使用focal loss,不使用则使用默认的CEloss')
     parser.add_argument('--eval_epoch', type=int, default=1, help='验证频率，计算在验证集上的评价指标，会影响训练速度')
     parser.add_argument('--eval_metric', type=str, default='miou', help='评价指标')
-    parser.add_argument('--save_dir', type=str, default='log_113', help='权重及训练日志保存路径')
+    parser.add_argument('--weight_save_dir', type=str, default='log_0', help='权重保存路径')
+    parser.add_argument('--log_save_dir', type=str, default='log_0/log.json', help='训练日志保存路径')
+    parser.add_argument('--model_param_save_dir', type=str, default='log_0/model_param.json', help='模型元数据保存路径')
     parser.add_argument('-providers', type=str, default='cuda', help='模型训练设备')
 
     args = parser.parse_args()
     return args
-
 
 def write_filenames_to_file(file_names, file_path):
     with open(file_path, 'w') as file:
@@ -98,6 +100,14 @@ def convert_label(CLASSES_need, classes_pri):
 
 if __name__ == "__main__":
     args = args_parser()
+    from datetime import datetime
+
+    # 获取当前日期和时间
+    now = datetime.now()
+
+    # 格式化日期和时间
+    datetime_begin = now.strftime("%Y-%m-%d %H:%M:%S")
+
     print(args.dataset_path)
 
     # ---------------------------------#
@@ -139,7 +149,7 @@ if __name__ == "__main__":
     # -----------------------------------------------------#
     CLASS_ALL = ast.literal_eval(args.classes)
     CLASSES_need_label = args.categorys
-    CLASSES_need = {i+1: CLASS_ALL[key] for i, key in enumerate(CLASSES_need_label)}
+    CLASSES_need = {i + 1: CLASS_ALL[key] for i, key in enumerate(CLASSES_need_label)}
     print(CLASSES_need)  #
     num_classes = len(CLASSES_need) + (0 if CLASSES_need.get("background") else 1)
     # -----------------------------------------------------#
@@ -176,6 +186,11 @@ if __name__ == "__main__":
     # 先判断是否进行迁移学习，如果进行，则从迁移学习的路径读取
     # 否，则判断是否使用预训练的backbone，如果使用，则读取backbone存储路径
     # 最后加载权重文件
+    all_args = {'model': 'unet', **vars(args)}
+    all_args['classes'] = ast.literal_eval(all_args['classes'])
+    os.makedirs(args.weight_save_dir, exist_ok=True)
+    with open(args.log_save_dir, 'w') as f:
+        json.dump(all_args, f, indent=4)
 
     model_path = ''
     if args.transfer_path != '':
@@ -286,7 +301,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------#
     #   save_dir        权值与日志文件保存的文件夹
     # ------------------------------------------------------------------#
-    save_dir = args.save_dir
+    # save_dir = args.save_dir
     # ------------------------------------------------------------------#
     #   eval_flag       是否在训练时进行评估，评估对象为验证集
     #   eval_period     代表多少个epoch评估一次，不建议频繁的评估
@@ -373,6 +388,9 @@ if __name__ == "__main__":
         load_key, no_load_key, temp_dict = [], [], {}
         # 在这里修改，加载最后一层分类的参数
         for k, v in pretrained_dict.items():
+            if k in ["final.weight", "final.bias"]:
+                no_load_key.append(k)
+                continue
             if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
                 temp_dict[k] = v
                 load_key.append(k)
@@ -391,12 +409,12 @@ if __name__ == "__main__":
     # ----------------------#
     #   记录Loss
     # ----------------------#
-    if local_rank == 0:
-        time_str = datetime.datetime.strftime(datetime.datetime.now(), '%Y_%m_%d_%H_%M_%S')
-        log_dir = os.path.join(save_dir, "loss_" + str(time_str))  # 是否需要修改，日志存放路径
-        loss_history = LossHistory(log_dir, model, input_shape=input_shape)
-    else:
-        loss_history = None
+    # if local_rank == 0:
+    #     time_str = datetime.datetime.strftime(datetime.datetime.now(), '%Y_%m_%d_%H_%M_%S')
+    #     log_dir = os.path.join(save_dir, "loss_" + str(time_str))  # 是否需要修改，日志存放路径
+    #     loss_history = LossHistory(log_dir, model, input_shape=input_shape)
+    # else:
+    #     loss_history = None
 
     # ------------------------------------------------------------------#
     #   torch 1.2不支持amp，建议使用torch 1.7.1及以上正确使用fp16
@@ -490,6 +508,7 @@ if __name__ == "__main__":
         num_val = 0
         # 判断读取的数据集是单个还是多个
         import json
+
         split_rate = 0.8
         for VOCdevkit_path in VOCdevkit_paths:
             # 增加数据集metajson的读取，获得数据集信息
@@ -509,10 +528,12 @@ if __name__ == "__main__":
             convert_map, has_background = convert_label(CLASSES_need, classes_pri)
             # num_class = len(classes_pri) + (0 if has_background else 1)  # 1表示增加背景类
             if train_dataset is None:
-                train_dataset = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path, convert_map)  # 传入数据增强的参数
+                train_dataset = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path,
+                                            convert_map)  # 传入数据增强的参数
                 val_dataset = UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path, convert_map)
             else:
-                train_dataset += UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path, convert_map)  # 传入数据增强的参数
+                train_dataset += UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path,
+                                             convert_map)  # 传入数据增强的参数
                 val_dataset += UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path, convert_map)
 
         # ---------------------------------------#
@@ -530,9 +551,9 @@ if __name__ == "__main__":
                 Init_Epoch=Init_Epoch, Freeze_Epoch=Freeze_Epoch, UnFreeze_Epoch=UnFreeze_Epoch,
                 Freeze_batch_size=Freeze_batch_size, Unfreeze_batch_size=Unfreeze_batch_size, Freeze_Train=Freeze_Train, \
                 Init_lr=Init_lr, Min_lr=Min_lr, optimizer_type=optimizer_type, momentum=momentum,
-                lr_decay_type=lr_decay_type, \
-                save_period=save_period, save_dir=save_dir, num_workers=num_workers, num_train=num_train,
-                num_val=num_val, devive = device
+                lr_decay_type=lr_decay_type, log_save_dir=args.log_save_dir, weight_save_dir=args.weight_save_dir,
+                model_param_save_dir=args.model_param_save_dir, num_workers=num_workers, num_train=num_train,
+                num_val=num_val, devive=device
             )
 
         if distributed:
@@ -557,15 +578,18 @@ if __name__ == "__main__":
         # ----------------------#
         #   记录eval的map曲线
         # ----------------------#
-        if local_rank == 0:
-            eval_callback = EvalCallback(model, input_shape, num_classes, val_lines, VOCdevkit_path, log_dir, Cuda, \
-                                         eval_flag=eval_flag, period=eval_period)
-        else:
-            eval_callback = None
+        # if local_rank == 0:
+        #     eval_callback = EvalCallback(model, input_shape, num_classes, val_lines, VOCdevkit_path, log_dir, Cuda, \
+        #                                  eval_flag=eval_flag, period=eval_period)
+        # else:
+        #     eval_callback = None
 
         # ---------------------------------------#
         #   开始模型训练
         # ---------------------------------------#
+        step = 0
+        avg_loss = 100.0
+        iou = 0
         for epoch in range(Init_Epoch, UnFreeze_Epoch):
             # ---------------------------------------#
             #   如果模型有冻结学习部分
@@ -614,12 +638,31 @@ if __name__ == "__main__":
 
             set_optimizer_lr(optimizer, lr_scheduler_func, epoch)
 
-            fit_one_epoch(model_train, model, loss_history, eval_callback, optimizer, epoch,
-                          epoch_step, epoch_step_val, gen, gen_val, UnFreeze_Epoch, Cuda, dice_loss, focal_loss,
-                          cls_weights, num_classes, fp16, scaler, save_period, save_dir, local_rank)
+            step, avg_loss, iou = fit_one_epoch(model_train, model, args, step, optimizer, epoch,
+                                                epoch_step, epoch_step_val, gen, gen_val, UnFreeze_Epoch, Cuda,
+                                                dice_loss, focal_loss,
+                                                cls_weights, num_classes, fp16, scaler, local_rank, avg_loss, iou)
 
             if distributed:
                 dist.barrier()
 
-        if local_rank == 0:
-            loss_history.writer.close()
+        # 获取当前日期和时间
+        now = datetime.now()
+        # 格式化日期和时间
+        datetime_end = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        model_param_dict = {"modelName": "UNet-01",
+                            "baseModel": "Unet",
+                            "backbone": args.backbone,
+                            "modelType": "landcover-classfication",
+                            "modelVersion": "1.0.0",
+                            "modelDescription": "模型说明",
+                            "category": list(CLASSES_need.values()),
+                            "Accuray": round(iou, 2),
+                            "author": "...",
+                            "create-time": datetime_begin,
+                            "end-time": datetime_end}
+        with open(args.model_param_save_dir, 'w', encoding='utf-8') as ff:
+            json.dump(model_param_dict, ff, indent=4, ensure_ascii=False)
+        # if local_rank == 0:
+        #     loss_history.writer.close()

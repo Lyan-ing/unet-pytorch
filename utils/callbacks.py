@@ -52,7 +52,7 @@ class LossHistory():
                 f.write(str(val_loss))
                 f.write("\n")
             
-        self.writer.add_scalar('loss', loss, epoch)
+        self.writer.add_scalar('loss', loss, epoch)  # log保存的信息
         if self.val_loss_flag:
             self.writer.add_scalar('val_loss', val_loss, epoch)
             
@@ -107,10 +107,10 @@ class EvalCallback():
         self.image_ids          = [image_id.split()[0] for image_id in image_ids]
         self.mious      = [0]
         self.epoches    = [0]
-        if self.eval_flag:
-            with open(os.path.join(self.log_dir, "epoch_miou.txt"), 'a') as f:
-                f.write(str(0))
-                f.write("\n")
+        # if self.eval_flag:
+        #     with open(os.path.join(self.log_dir, "epoch_miou.txt"), 'a') as f:
+        #         f.write(str(0))
+        #         f.write("\n")
 
     def get_miou_png(self, image):
         #---------------------------------------------------------#
@@ -163,7 +163,7 @@ class EvalCallback():
     def on_epoch_end(self, epoch, model_eval):
         if epoch % self.period == 0 and self.eval_flag:
             self.net    = model_eval
-            gt_dir      = os.path.join(self.dataset_path, "VOC2007/SegmentationClass/")
+            gt_dir      = os.path.join(self.dataset_path, "SegmentationClass/")  # 数据集路径修改
             pred_dir    = os.path.join(self.miou_out_path, 'detection-results')
             if not os.path.exists(self.miou_out_path):
                 os.makedirs(self.miou_out_path)
@@ -174,7 +174,7 @@ class EvalCallback():
                 #-------------------------------#
                 #   从文件中读取图像
                 #-------------------------------#
-                image_path  = os.path.join(self.dataset_path, "VOC2007/JPEGImages/"+image_id+".jpg")
+                image_path  = os.path.join(self.dataset_path, "JPEGImages/"+image_id+".jpg")
                 image       = Image.open(image_path)
                 #------------------------------#
                 #   获得预测txt
