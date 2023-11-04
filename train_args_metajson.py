@@ -50,21 +50,21 @@ def args_parser():
                         help='所有类别')
     parser.add_argument('--categorys', type=int, nargs='+', help='需要预测的类别')
     parser.add_argument('--pretrained', type=bool, default=True, help='是否使用预训练backbone权重')
-    parser.add_argument('--transfer_path', type=str, default=r'E:\python\ZEV\unet-pytorch\logs\last_epoch_weights.pth', help='基于已有权重进行迁移学习的权重路径')
+    parser.add_argument('--transfer_path', type=str, default='log_0/last_epoch_weights.pth', help='基于已有权重进行迁移学习的权重路径')
     parser.add_argument('--dataset_path', type=str, nargs='+', help='数据集路径')
 
     parser.add_argument('--training_epoch', type=int, default=10, help='整个网络训练的epoch')
     parser.add_argument('--batch_size', type=int, default=2, help='整个网络全都更新的bz')
 
     parser.add_argument('--init_lr', type=float, default=1e-4, help='初始学习率')
-    parser.add_argument('--dice_loss', type=bool, default=False, help='是否使用dice loss')
+    parser.add_argument('--dice_loss', type=bool, default=True, help='是否使用dice loss')
     parser.add_argument('--focal_loss', type=bool, default=True, help='是否使用focal loss,不使用则使用默认的CEloss')
     parser.add_argument('--eval_epoch', type=int, default=1, help='验证频率，计算在验证集上的评价指标，会影响训练速度')
     parser.add_argument('--eval_metric', type=str, default='miou', help='评价指标')
-    parser.add_argument('--weight_save_dir', type=str, default='log_0', help='权重保存路径')
-    parser.add_argument('--log_save_dir', type=str, default='log_0/log.json', help='训练日志保存路径')
-    parser.add_argument('--model_param_save_dir', type=str, default='log_0/model_param.json', help='模型元数据保存路径')
-    parser.add_argument('-providers', type=str, default='cuda', help='模型训练设备')
+    parser.add_argument('--weight_save_dir', type=str, default='log_1', help='权重保存路径')
+    parser.add_argument('--log_save_dir', type=str, default='log_1/log.json', help='训练日志保存路径')
+    parser.add_argument('--model_param_save_dir', type=str, default='log_1/model_param.json', help='模型元数据保存路径')
+    parser.add_argument('--providers', type=str, default='cuda', help='模型训练设备')
 
     args = parser.parse_args()
     return args
@@ -387,6 +387,7 @@ if __name__ == "__main__":
         pretrained_dict = torch.load(model_path, map_location=device)
         load_key, no_load_key, temp_dict = [], [], {}
         # 在这里修改，加载最后一层分类的参数
+        # 判断一下迁移学习的分类类别与现在的是否完全一致
         for k, v in pretrained_dict.items():
             if k in ["final.weight", "final.bias"]:
                 no_load_key.append(k)
@@ -526,6 +527,9 @@ if __name__ == "__main__":
             num_train += len(train_lines)
             num_val += len(val_lines)
             convert_map, has_background = convert_label(CLASSES_need, classes_pri)
+
+            if len(convert_map) == 0:
+                print("当前数据集不包含要预测目标的有效标签")
             # num_class = len(classes_pri) + (0 if has_background else 1)  # 1表示增加背景类
             if train_dataset is None:
                 train_dataset = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path,
