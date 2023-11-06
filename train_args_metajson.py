@@ -10,6 +10,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim as optim
+from loguru import logger
 from torch.utils.data import DataLoader
 
 from nets.unet import Unet
@@ -46,28 +47,31 @@ def args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--backbone', type=str, default='vgg', choices=['vgg', 'resnet50'],
                         help='backbone')
-    parser.add_argument('--classes', type=str, default="{1:'building',3:'grass',2:'tea'}",
+    parser.add_argument('--classes', type=str, nargs='+',
                         help='所有类别')
     parser.add_argument('--categorys', type=int, nargs='+', help='需要预测的类别')
-    parser.add_argument('--pretrained', type=bool, default=True, help='是否使用预训练backbone权重')
-    parser.add_argument('--transfer_path', type=str, default='log_0/last_epoch_weights.pth', help='基于已有权重进行迁移学习的权重路径')
+    parser.add_argument('--pretrained', type=str, default='true', help='是否使用预训练backbone权重')
+    parser.add_argument('--transfer_path', type=str, default='', help='基于已有权重进行迁移学习的权重路径')
     parser.add_argument('--dataset_path', type=str, nargs='+', help='数据集路径')
 
-    parser.add_argument('--training_epoch', type=int, default=10, help='整个网络训练的epoch')
+    parser.add_argument('--training_epoch', type=int, default=6, help='整个网络训练的epoch')
     parser.add_argument('--batch_size', type=int, default=2, help='整个网络全都更新的bz')
 
     parser.add_argument('--init_lr', type=float, default=1e-4, help='初始学习率')
-    parser.add_argument('--dice_loss', type=bool, default=True, help='是否使用dice loss')
-    parser.add_argument('--focal_loss', type=bool, default=True, help='是否使用focal loss,不使用则使用默认的CEloss')
+    # parser.add_argument('--dice_loss', type=bool, default=True, help='是否使用dice loss')
+    # parser.add_argument('--focal_loss', type=bool, default=True, help='是否使用focal loss,不使用则使用默认的CEloss')
+    parser.add_argument('--dice_loss', type=str, default='true', help='是否使用dice loss')
+    parser.add_argument('--focal_loss', type=str, default='true', help='是否使用focal loss,不使用则使用默认的CEloss')
     parser.add_argument('--eval_epoch', type=int, default=1, help='验证频率，计算在验证集上的评价指标，会影响训练速度')
     parser.add_argument('--eval_metric', type=str, default='miou', help='评价指标')
-    parser.add_argument('--weight_save_dir', type=str, default='log_1', help='权重保存路径')
-    parser.add_argument('--log_save_dir', type=str, default='log_1/log.json', help='训练日志保存路径')
-    parser.add_argument('--model_param_save_dir', type=str, default='log_1/model_param.json', help='模型元数据保存路径')
+    parser.add_argument('--weight_save_dir', type=str, default='log_2', help='权重及元数据保存路径')
+    parser.add_argument('--log_save_dir', type=str, default='log_2/log.json', help='训练日志保存路径')
+    # parser.add_argument('--model_param_save_dir', type=str, default='log_1/model_param.json', help='模型元数据保存路径')
     parser.add_argument('--providers', type=str, default='cuda', help='模型训练设备')
 
     args = parser.parse_args()
     return args
+
 
 def write_filenames_to_file(file_names, file_path):
     with open(file_path, 'w') as file:
@@ -83,19 +87,27 @@ def convert_label(CLASSES_need, classes_pri):
     # 已有数据集的类别名称到类别值的映射
     class_value_mapping = {}
     # 遍历已有数据集的类别名称到类别值的映射
-    has_background = False
+    has_label = False
+    need_convert = False
+
+    # 增加判断，是否需要转换
     for class_info in classes_pri:
         class_name = class_info["classname_en"]
         class_value = class_info["class_value"]
-        if class_name.lower() == 'background':
-            has_background = True
+        # if class_name.lower() == 'background':
+        #     has_background = True
         # 如果已有数据集的类别名称在你想要的类别名称到类别值的映射中
         if class_name in desired_class_name_to_value:
+            if class_value != desired_class_name_to_value[class_name]:
+                need_convert = True
             # 将已有数据集的类别值映射到你想要的类别值
             class_value_mapping[class_value] = desired_class_name_to_value[class_name]
-    print(class_value_mapping)
-    print(has_background)
-    return class_value_mapping, has_background
+            has_label = True
+    logger.info(class_value_mapping)
+    # print(has_background)
+    if not need_convert:
+        class_value_mapping = None
+    return class_value_mapping, has_label
 
 
 if __name__ == "__main__":
@@ -106,9 +118,9 @@ if __name__ == "__main__":
     now = datetime.now()
 
     # 格式化日期和时间
-    datetime_begin = now.strftime("%Y-%m-%d %H:%M:%S")
+    datetime_begin = now.strftime("%Y-%m-%d")
 
-    print(args.dataset_path)
+    logger.info(args.dataset_path)
 
     # ---------------------------------#
     #   Cuda    是否使用Cuda
@@ -131,7 +143,7 @@ if __name__ == "__main__":
     #       在终端中输入    CUDA_VISIBLE_DEVICES=0,1 python train.py
     #   DDP模式：
     #       设置            distributed = True
-    #       在终端中输入    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 train.py
+    #       在终端中输入    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed .launch --nproc_per_node=2 train.py
     # ---------------------------------------------------------------------#
     distributed = False
     # ---------------------------------------------------------------------#
@@ -147,10 +159,13 @@ if __name__ == "__main__":
     #   num_classes     训练自己的数据集必须要修改的
     #                   自己需要的分类个数+1，如2+1
     # -----------------------------------------------------#
-    CLASS_ALL = ast.literal_eval(args.classes)
-    CLASSES_need_label = args.categorys
-    CLASSES_need = {i + 1: CLASS_ALL[key] for i, key in enumerate(CLASSES_need_label)}
-    print(CLASSES_need)  #
+    # CLASS_ALL = ast.literal_eval(args.classes)
+    # CLASSES_need_label = args.categorys
+
+    CLASS_ALL = args.classes
+
+    CLASSES_need = {i + 1: class_name for i, class_name in enumerate(CLASS_ALL)}
+    logger.info(CLASSES_need)  #
     num_classes = len(CLASSES_need) + (0 if CLASSES_need.get("background") else 1)
     # -----------------------------------------------------#
     #   主干网络选择
@@ -187,19 +202,27 @@ if __name__ == "__main__":
     # 否，则判断是否使用预训练的backbone，如果使用，则读取backbone存储路径
     # 最后加载权重文件
     all_args = {'model': 'unet', **vars(args)}
-    all_args['classes'] = ast.literal_eval(all_args['classes'])
+    # all_args['classes'] = ast.literal_eval(all_args['classes'])
     os.makedirs(args.weight_save_dir, exist_ok=True)
-    with open(args.log_save_dir, 'w') as f:
+    logger.info(all_args)
+    with open(os.path.join(args.weight_save_dir, 'args.json'), 'w', encoding='utf-8') as f:
         json.dump(all_args, f, indent=4)
 
     model_path = ''
+    classes_match_flag = False
     if args.transfer_path != '':
-        model_path = args.transfer_path  # 需要修改一下，兼容backbone的
-    elif args.pretrained:
+        model_path = os.path.join(args.transfer_path, "best_epoch_weights.pth")  # 需要修改一下，兼容backbone的
+        model_meta_param_path = os.path.join(args.transfer_path, 'model_param.json')
+        with open(model_meta_param_path, 'r', encoding='utf-8') as ft:
+            transfer_model_param = json.load(ft)
+        transfer_model_category = transfer_model_param['category']
+        if transfer_model_category == CLASS_ALL:
+            classes_match_flag = True
+    elif args.pretrained.lower() == 'true':
         if args.backbone == 'vgg':
-            model_path = 'model_data/unet_vgg_voc.pth'
+            model_path = os.path.join(os.path.dirname(__file__), 'model_data/unet_vgg_voc.pth')
         elif args.backbone == 'resnet50':
-            model_path = 'model_data/unet_resnet50_voc.pth'
+            model_path = os.path.join(os.path.dirname(__file__), 'model_data/unet_resnet50_voc.pth')
     # -----------------------------------------------------#
     #   input_shape     输入图片的大小，32的倍数
     # -----------------------------------------------------#
@@ -319,11 +342,11 @@ if __name__ == "__main__":
     #   种类多（十几类）时，如果batch_size比较大（10以上），那么设置为True
     #   种类多（十几类）时，如果batch_size比较小（10以下），那么设置为False
     # ------------------------------------------------------------------#
-    dice_loss = args.dice_loss
+    dice_loss = True if args.dice_loss.lower() == 'true' else False
     # ------------------------------------------------------------------#
     #   是否使用focal loss来防止正负样本不平衡, 默认为CEloss
     # ------------------------------------------------------------------#
-    focal_loss = args.focal_loss
+    focal_loss = True if args.focal_loss.lower() == 'true' else False
     # ------------------------------------------------------------------#
     #   是否给不同种类赋予不同的损失权值，默认是平衡的。
     #   设置的话，注意设置成numpy形式的，长度和num_classes一样。
@@ -338,7 +361,7 @@ if __name__ == "__main__":
     #                   keras里开启多线程有些时候速度反而慢了许多
     #                   在IO为瓶颈的时候再开启多线程，即GPU运算速度远大于读取图片的速度。
     # ------------------------------------------------------------------#
-    num_workers = 4
+    num_workers = 0
 
     seed_everything(seed)
     # ------------------------------------------------------#
@@ -351,8 +374,8 @@ if __name__ == "__main__":
         rank = int(os.environ["RANK"])
         device = torch.device("cuda", local_rank)
         if local_rank == 0:
-            print(f"[{os.getpid()}] (rank = {rank}, local_rank = {local_rank}) training...")
-            print("Gpu Device Count : ", ngpus_per_node)
+            logger.info(f"[{os.getpid()}] (rank = {rank}, local_rank = {local_rank}) training...")
+            logger.info("Gpu Device Count : ", ngpus_per_node)
     else:
         device = torch.device('cuda' if (torch.cuda.is_available() and Cuda) else 'cpu')
         local_rank = 0
@@ -378,7 +401,7 @@ if __name__ == "__main__":
         #   权值文件请看README，百度网盘下载
         # ------------------------------------------------------#
         if local_rank == 0:
-            print('Load weights {}.'.format(model_path))
+            logger.info('Load weights {}.'.format(model_path))
 
         # ------------------------------------------------------#
         #   根据预训练权重的Key和模型的Key进行加载
@@ -387,11 +410,12 @@ if __name__ == "__main__":
         pretrained_dict = torch.load(model_path, map_location=device)
         load_key, no_load_key, temp_dict = [], [], {}
         # 在这里修改，加载最后一层分类的参数
-        # 判断一下迁移学习的分类类别与现在的是否完全一致
+
         for k, v in pretrained_dict.items():
             if k in ["final.weight", "final.bias"]:
-                no_load_key.append(k)
-                continue
+                if not classes_match_flag:  # 判断一下迁移学习的分类类别与现在的是否完全一致,
+                    no_load_key.append(k)
+                    continue
             if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
                 temp_dict[k] = v
                 load_key.append(k)
@@ -403,9 +427,13 @@ if __name__ == "__main__":
         #   显示没有匹配上的Key
         # ------------------------------------------------------#
         if local_rank == 0:
-            print("\nSuccessful Load Key:", str(load_key)[:500], "……\nSuccessful Load Key Num:", len(load_key))
-            print("\nFail To Load Key:", str(no_load_key)[:500], "……\nFail To Load Key num:", len(no_load_key))
-            print("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
+            logger.info("Successful Load Key:")
+            logger.info(str(load_key)[:500])
+            logger.info("Successful Load Key Num:" + str(len(load_key)))
+            logger.info("Fail To Load Key:")
+            logger.info(str(no_load_key)[:500])
+            logger.info("Fail To Load Key num:" + str(len(no_load_key)))
+            logger.info("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
 
     # ----------------------#
     #   记录Loss
@@ -435,7 +463,7 @@ if __name__ == "__main__":
     if sync_bn and ngpus_per_node > 1 and distributed:
         model_train = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model_train)
     elif sync_bn:
-        print("Sync_bn is not support in one gpu or not distributed.")
+        logger.info("Sync_bn is not support in one gpu or not distributed.")
 
     if Cuda:
         if distributed:
@@ -502,14 +530,12 @@ if __name__ == "__main__":
         # ------------------------------#
         # 获取数据集的名称，从而获得对应的数据集路径等元信息
         VOCdevkit_paths = args.dataset_path  #
-        print(VOCdevkit_paths)
+        logger.info(VOCdevkit_paths)
         train_dataset = None
         val_dataset = None
         num_train = 0
         num_val = 0
         # 判断读取的数据集是单个还是多个
-        import json
-
         split_rate = 0.8
         for VOCdevkit_path in VOCdevkit_paths:
             # 增加数据集metajson的读取，获得数据集信息
@@ -526,10 +552,11 @@ if __name__ == "__main__":
             val_lines = data_names[split_index:]
             num_train += len(train_lines)
             num_val += len(val_lines)
-            convert_map, has_background = convert_label(CLASSES_need, classes_pri)
+            convert_map, has_label = convert_label(CLASSES_need, classes_pri)
 
-            if len(convert_map) == 0:
-                print("当前数据集不包含要预测目标的有效标签")
+            if not has_label:
+                logger.warning("当前数据集不包含要预测目标的有效标签")
+                continue
             # num_class = len(classes_pri) + (0 if has_background else 1)  # 1表示增加背景类
             if train_dataset is None:
                 train_dataset = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path,
@@ -556,7 +583,7 @@ if __name__ == "__main__":
                 Freeze_batch_size=Freeze_batch_size, Unfreeze_batch_size=Unfreeze_batch_size, Freeze_Train=Freeze_Train, \
                 Init_lr=Init_lr, Min_lr=Min_lr, optimizer_type=optimizer_type, momentum=momentum,
                 lr_decay_type=lr_decay_type, log_save_dir=args.log_save_dir, weight_save_dir=args.weight_save_dir,
-                model_param_save_dir=args.model_param_save_dir, num_workers=num_workers, num_train=num_train,
+                num_workers=num_workers, num_train=num_train,
                 num_val=num_val, devive=device
             )
 
@@ -650,10 +677,10 @@ if __name__ == "__main__":
             if distributed:
                 dist.barrier()
 
-        # 获取当前日期和时间
-        now = datetime.now()
-        # 格式化日期和时间
-        datetime_end = now.strftime("%Y-%m-%d %H:%M:%S")
+        # # 获取当前日期和时间
+        # now = datetime.now()
+        # # 格式化日期和时间
+        # datetime_end = now.strftime("%Y-%m-%d %H:%M:%S")
 
         model_param_dict = {"modelName": "UNet-01",
                             "baseModel": "Unet",
@@ -665,8 +692,9 @@ if __name__ == "__main__":
                             "Accuray": round(iou, 2),
                             "author": "...",
                             "create-time": datetime_begin,
-                            "end-time": datetime_end}
-        with open(args.model_param_save_dir, 'w', encoding='utf-8') as ff:
+                            # "end-time": datetime_end
+                            }
+        with open(os.path.join(args.weight_save_dir, 'model_param.json'), 'w', encoding='utf-8') as ff:
             json.dump(model_param_dict, ff, indent=4, ensure_ascii=False)
         # if local_rank == 0:
         #     loss_history.writer.close()

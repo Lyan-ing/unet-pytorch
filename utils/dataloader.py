@@ -57,7 +57,7 @@ class UnetDataset(Dataset):
         image   = cvtColor(image)
         if self.conversion_dict is None:
             label = Image.fromarray(np.array(label))
-        else:
+        else:  # 先判断是否需要转换，在前面处理了，如果不需要，就是none
             # 复制、值转化
             ori_label = np.array(label)
             convert_label = np.zeros_like(ori_label)
