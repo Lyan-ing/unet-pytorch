@@ -3,6 +3,7 @@ import ast
 import datetime
 import os
 import random
+import sys
 from functools import partial
 import json
 import numpy as np
@@ -162,7 +163,10 @@ if __name__ == "__main__":
     # CLASS_ALL = ast.literal_eval(args.classes)
     # CLASSES_need_label = args.categorys
 
-    CLASS_ALL = args.classes
+    CLASS_ALL = args.classes.copy()
+    for class_label in args.classes:
+        if class_label.lower() == "background":
+            CLASS_ALL.remove(class_label)
 
     CLASSES_need = {i + 1: class_name for i, class_name in enumerate(CLASS_ALL)}
     logger.info(CLASSES_need)  #
@@ -652,7 +656,8 @@ if __name__ == "__main__":
 
                 if distributed:
                     batch_size = batch_size // ngpus_per_node
-
+                if train_dataset is None:
+                    sys.exit()
                 gen = DataLoader(train_dataset, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers,
                                  pin_memory=True,
                                  drop_last=True, collate_fn=unet_dataset_collate, sampler=train_sampler,
