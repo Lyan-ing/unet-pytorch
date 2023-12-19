@@ -25,13 +25,13 @@ class UnetDataset(Dataset):
 
     def __getitem__(self, index):
         annotation_line = self.annotation_lines[index]
-        name = annotation_line.split()[0]
+        # name = annotation_line.split('.')[0]
 
         # -------------------------------#
         #   从文件中读取图像
         # -------------------------------#
-        jpg = Image.open(os.path.join(os.path.join(self.dataset_path, "jpg"), name + ".jpg"))
-        png = Image.open(os.path.join(os.path.join(self.dataset_path, "anno"), name + ".png"))
+        jpg = Image.open(os.path.join(os.path.join(self.dataset_path, "jpg"), annotation_line[0]))
+        png = Image.open(os.path.join(os.path.join(self.dataset_path, "anno"), annotation_line[1]))
         # -------------------------------#
         #   数据增强
         # -------------------------------#
@@ -39,7 +39,7 @@ class UnetDataset(Dataset):
 
         jpg = np.transpose(preprocess_input(np.array(jpg, np.float64)), [2, 0, 1])
         png = np.array(png)
-        png[png >= self.num_classes] = self.num_classes  # ？？
+        png[png >= self.num_classes] = self.num_classes  # ？？ 例如10类，应该是0-9，那么标注>=10的都作为10，后面会忽略这部分
         # -------------------------------------------------------#
         #   转化成one_hot的形式
         #   在这里需要+1是因为voc数据集有些标签具有白边部分
