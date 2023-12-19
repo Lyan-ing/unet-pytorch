@@ -48,9 +48,11 @@ def args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--backbone', type=str, default='vgg', choices=['vgg', 'resnet50'],
                         help='backbone')
-    parser.add_argument('--classes', type=str, nargs='+',
-                        help='所有类别')
+    parser.add_argument('--classes', type=str, nargs='+', help='所有类别')
+    parser.add_argument('--freeze', type=str, default='true', help='初始训练时，是否冻结backbone')
+    parser.add_argument('--classes_weight', type=int, nargs='+', help='不同类别的权重,该类图像越少，数值越大')
     parser.add_argument('--categorys', type=int, nargs='+', help='需要预测的类别')
+    parser.add_argument('--in_channels', type=int, default=3, help='输入图像波段数')
     parser.add_argument('--pretrained', type=str, default='true', help='是否使用预训练backbone权重')
     parser.add_argument('--transfer_path', type=str, default='', help='基于已有权重进行迁移学习的权重路径')
     parser.add_argument('--dataset_path', type=str, nargs='+', help='数据集路径')
@@ -62,7 +64,7 @@ def args_parser():
     # parser.add_argument('--dice_loss', type=bool, default=True, help='是否使用dice loss')
     # parser.add_argument('--focal_loss', type=bool, default=True, help='是否使用focal loss,不使用则使用默认的CEloss')
     parser.add_argument('--dice_loss', type=str, default='true', help='是否使用dice loss')
-    parser.add_argument('--focal_loss', type=str, default='true', help='是否使用focal loss,不使用则使用默认的CEloss')
+    parser.add_argument('--focal_loss', type=str, default='true', help='是否使用focal loss,不使用则CEloss')
     parser.add_argument('--eval_epoch', type=int, default=1, help='验证频率，计算在验证集上的评价指标，会影响训练速度')
     parser.add_argument('--eval_metric', type=str, default='miou', help='评价指标')
     parser.add_argument('--weight_save_dir', type=str, default='log_2', help='权重及元数据保存路径')
@@ -396,7 +398,7 @@ if __name__ == "__main__":
         else:
             download_weights(backbone)
 
-    model = Unet(num_classes=num_classes, pretrained=pretrained, backbone=backbone).train()
+    model = Unet(num_classes=num_classes, pretrained=pretrained, backbone=backbone, in_channels=args.in_channels).train()
     if not pretrained:
         weights_init(model)
 
@@ -687,19 +689,19 @@ if __name__ == "__main__":
         # # 格式化日期和时间
         # datetime_end = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        model_param_dict = {"modelName": "UNet-01",
-                            "baseModel": "Unet",
-                            "backbone": args.backbone,
-                            "modelType": "landcover-classfication",
-                            "modelVersion": "1.0.0",
-                            "modelDescription": "模型说明",
-                            "category": list(CLASSES_need.values()),
-                            "Accuray": round(iou, 2),
-                            "author": "...",
-                            "create-time": datetime_begin,
-                            # "end-time": datetime_end
-                            }
-        with open(os.path.join(args.weight_save_dir, 'model_param.json'), 'w', encoding='utf-8') as ff:
-            json.dump(model_param_dict, ff, indent=4, ensure_ascii=False)
+            model_param_dict = {"modelName": "UNet-01",
+                                "baseModel": "Unet",
+                                "backbone": args.backbone,
+                                "modelType": "landcover-classfication",
+                                "modelVersion": "1.0.0",
+                                "modelDescription": "模型说明",
+                                "category": list(CLASSES_need.values()),
+                                "Accuray": round(iou, 2),
+                                "author": "...",
+                                "create-time": datetime_begin,
+                                # "end-time": datetime_end
+                                }
+            with open(os.path.join(args.weight_save_dir, 'model_param.json'), 'w', encoding='utf-8') as ff:
+                json.dump(model_param_dict, ff, indent=4, ensure_ascii=False)
         # if local_rank == 0:
         #     loss_history.writer.close()
