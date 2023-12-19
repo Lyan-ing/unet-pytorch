@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 from nets.unet import Unet
 from nets.unet_training import get_lr_scheduler, set_optimizer_lr, weights_init
 # from utils.callbacks import EvalCallback, LossHistory
-from utils.dataloader import UnetDataset, unet_dataset_collate
+# from utils.dataloader import UnetDataset, unet_dataset_collate
 from utils.utils import (download_weights, seed_everything, show_config,
                          worker_init_fn)
 from utils.utils_fit import fit_one_epoch
@@ -106,11 +106,34 @@ def convert_label(CLASSES_need, classes_pri):
             # 将已有数据集的类别值映射到你想要的类别值
             class_value_mapping[class_value] = desired_class_name_to_value[class_name]
             has_label = True
-    logger.info(class_value_mapping)
+    # logger.info(class_value_mapping)
     # print(has_background)
     if not need_convert:
         class_value_mapping = None
     return class_value_mapping, has_label
+
+
+def match_images_and_labels(image_list, label_list):
+    # 获取图像和标签的文件名（不包含扩展名）
+    logger.info("==> begin check the matching of image and label")
+    image_names = [os.path.splitext(os.path.basename(image))[0] for image in image_list]
+    label_names = [os.path.splitext(os.path.basename(label))[0] for label in label_list]
+
+    # 找到匹配的图像和标签
+    matched_images = []
+    unmatched_count = 0
+    for image_name, image in zip(image_names, image_list):
+        if image_name in label_names:
+            label =label_list[label_names.index(image_name)]
+            matched_images.append([image, label])
+            label_names.remove(image_name)
+            label_list.remove(label)
+            # matched_labels.append(label_list[label_names.index(image_name)])
+        else:
+            unmatched_count += 1
+    logger.info(f"Down! {unmatched_count} images have not label")
+    return matched_images
+
 
 
 if __name__ == "__main__":
@@ -130,8 +153,8 @@ if __name__ == "__main__":
     #           没有GPU可以设置成False
     # ---------------------------------#
     Cuda = False
-    if args.providers.lower() == 'cuda':
-        Cuda = True
+    # if args.providers.lower() == 'cuda':
+    #     Cuda = True
     # ----------------------------------------------#
     #   Seed    用于固定随机种子
     #           使得每次独立训练都可以获得一样的结果
@@ -278,7 +301,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------#
     Init_Epoch = 0  # args.init_epoch
     Freeze_Epoch = args.training_epoch // 3  # 冻结训练20% # args.freeze_epoch
-    Freeze_batch_size = args.batch_size * 2
+    Freeze_batch_size = args.batch_size
     # ------------------------------------------------------------------#
     #   解冻阶段训练参数
     #   此时模型的主干不被冻结了，特征提取网络会发生改变
@@ -399,6 +422,11 @@ if __name__ == "__main__":
             download_weights(backbone)
 
     model = Unet(num_classes=num_classes, pretrained=pretrained, backbone=backbone, in_channels=args.in_channels).train()
+    if args.in_channels ==3:
+        from utils.dataloader import UnetDataset, unet_dataset_collate
+    else:
+        from utils.tif import build_costum_tif_loader as UnetDataset
+        from utils.tif import unet_dataset_collate
     if not pretrained:
         weights_init(model)
 
@@ -550,8 +578,11 @@ if __name__ == "__main__":
 
             # 获取类别数
             classes_pri = metadata['classes']
-            data_names = os.listdir(os.path.join(VOCdevkit_path, "anno"))
-            data_names = [i[:-4] for i in data_names]
+            image_list = os.listdir(os.path.join(VOCdevkit_path, "jpg"))
+            label_list = os.listdir(os.path.join(VOCdevkit_path, "anno"))
+            data_names = match_images_and_labels(image_list, label_list)
+            del image_list, label_list
+            # data_names = [i[:-4] for i in data_names]
             random.shuffle(data_names)
             split_index = int(len(data_names) * split_rate)
             train_lines = data_names[:split_index]
@@ -565,13 +596,17 @@ if __name__ == "__main__":
                 continue
             # num_class = len(classes_pri) + (0 if has_background else 1)  # 1表示增加背景类
             if train_dataset is None:
+                # train_dataset = build_costum_tif_loader(train_lines, input_shape, num_classes, VOCdevkit_path,
+                #                         convert_map, args.in_channels)
                 train_dataset = UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path,
-                                            convert_map)  # 传入数据增强的参数
-                val_dataset = UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path, convert_map)
+                                            convert_map, args.in_channels)  # 传入数据增强的参数
+                val_dataset = UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path,
+                                          convert_map, args.in_channels)
             else:
                 train_dataset += UnetDataset(train_lines, input_shape, num_classes, True, VOCdevkit_path,
-                                             convert_map)  # 传入数据增强的参数
-                val_dataset += UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path, convert_map)
+                                             convert_map, args.in_channels)  # 传入数据增强的参数
+                val_dataset += UnetDataset(val_lines, input_shape, num_classes, False, VOCdevkit_path,
+                                           convert_map, args.in_channels)
 
         # ---------------------------------------#
         #   判断每一个世代的长度
