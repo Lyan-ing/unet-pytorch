@@ -101,14 +101,14 @@ def fit_one_epoch(model_train, model, args, step, optimizer, epoch, epoch_step, 
             total_loss += loss.item()
             total_f_score += _f_score.item()
             log_dict = {"flag": "train", "step": step, "epoch": epoch, "loss": loss.item(), "lr": get_lr(optimizer)}
-            if iteration % 20 == 0:
+            if iteration % 100 == 0:
                 log_dict_vis = {"flag": "Train", "epoch": epoch, "iters": iteration, "all_iter": epoch_step,
                                 "loss": loss.item(), "lr": get_lr(optimizer)}
                 logger.info(log_dict_vis)
-            json.dump(log_dict, f)
-            f.write('\n')  # 添加换行符
-            f.flush()
-            step += 1
+                json.dump(log_dict, f)
+                f.write('\n')  # 添加换行符
+                f.flush()
+                step += 1
 
             # if local_rank == 0:
             #     pbar.set_postfix(**{'total_loss': total_loss / (iteration + 1),
